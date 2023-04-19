@@ -2,7 +2,7 @@
 
 A small **learning** project: **Terraform** provisions **VPC**, **RDS MySQL**, **Application Load Balancer**, and **ECS on Fargate**; **GitHub Actions** builds a **Flask** container and runs `terraform apply` using **OIDC** (no long-lived AWS keys in GitHub).
 
-This README explains **what runs where**, **the end-to-end flow**, **one-time bootstrap**, and **suggested labs** you can perform safely on your own account.
+This README explains **what runs where**, **initial setup**, **subsequent deployments**, **the end-to-end flow**, and **suggested labs** you can perform safely on your own account.
 
 ---
 
@@ -112,16 +112,20 @@ The target group health check calls **`/health`** on each task IP. When healthy,
 
 ---
 
-## One-time bootstrap (important)
+## Initial setup (first time) — do this in order
 
-There is a **chicken-and-egg** problem: the GitHub workflow assumes **`AWS_ROLE_ARN`**, but that role is **created by Terraform**. First apply must run **with normal AWS credentials** (for example your laptop using `aws configure` or environment variables).
+Goal: **AWS runs the stack** (VPC, RDS, ALB, ECS) and **at least one Fargate task is healthy** behind the ALB. Then **GitHub Actions** can take over for later deploys.
 
-### Step 0 — S3 bucket for Terraform state (first time only)
+There is a **chicken-and-egg**: the workflow needs **`AWS_ROLE_ARN`**, but that role is **created by Terraform**. So the **first** `terraform apply` must use **normal AWS credentials** on your laptop (`aws configure` or environment variables), not OIDC from GitHub yet.
 
-`terraform/backend.tf` points at an S3 **`bucket`** that **must already exist** in the AWS account you use for `terraform init`. The placeholder name in the repo will not exist in your account until you create it.
+### 1) Install and check versions
 
-1. Pick a **globally unique** bucket name (example: `mycompany-terraform-state-2026-us-east-1`).
-2. Create it in **`us-east-1`** (same region as `backend.tf`), then turn on versioning (recommended):
+- **Terraform ≥ 1.11** (`terraform version`) — required for S3 `use_lockfile` in `terraform/backend.tf`.
+- **Docker** (optional for step 4 if you only use GitHub Actions after bootstrap — but easiest first path is to push **`latest`** once from your laptop).
+
+### 2) Create the Terraform state bucket (once per account/region)
+
+`terraform/backend.tf` references an S3 **bucket that must already exist** (name is globally unique).
 
 ```bash
 export TF_STATE_BUCKET='your-globally-unique-bucket-name'
@@ -130,35 +134,119 @@ aws s3api put-bucket-versioning --bucket "$TF_STATE_BUCKET" \
   --versioning-configuration Status=Enabled
 ```
 
-3. Edit **`terraform/backend.tf`** and set **`bucket = "<that same name>"`**.
-4. Run **`terraform init`** from **`terraform/`** (use **`terraform init -reconfigure`** if you already tried init with a different backend).
+Edit **`terraform/backend.tf`**: set **`bucket`** to that name. From **`terraform/`**:
 
-Use **straight single quotes** in shell exports (ASCII `'`). “Smart” quotes copied from documents will break `export` lines.
+```bash
+terraform init
+# If you changed backend settings after a failed init:
+# terraform init -reconfigure
+```
 
-### Step A — Local environment
+Use **straight ASCII single quotes** in shell `export` lines (not curly “smart” quotes).
+
+### 3) Push a real container image to Docker Hub (critical)
+
+The ECS task definition always pulls:
+
+**`<TF_VAR_docker_username>/my-flask-app:<TF_VAR_image_tag>`**
+
+By default **`TF_VAR_image_tag`** is **`latest`** (`terraform/variables.tf`). **If that image does not exist on Docker Hub, ECS tasks will fail** (ALB **503**, target group **no healthy targets**) even when Terraform succeeds.
 
 From the repo root:
+
+```bash
+cd app
+docker build -t YOUR_DOCKERHUB_USERNAME/my-flask-app:latest .
+docker login   # Docker Hub
+docker push YOUR_DOCKERHUB_USERNAME/my-flask-app:latest
+```
+
+If you use a different tag, set **`export TF_VAR_image_tag='that-tag'`** before `terraform apply` and push **`...:that-tag`**.
+
+### 4) First `terraform apply` (laptop AWS credentials)
 
 ```bash
 cd terraform
 export TF_VAR_db_password='choose-a-strong-password'
 export TF_VAR_docker_username='your-dockerhub-username'
 export TF_VAR_github_repository='YOUR_GITHUB_LOGIN/Actions-TF-Fargate'
-terraform init
+# optional if not using default "latest":
+# export TF_VAR_image_tag='latest'
+
+terraform plan
 terraform apply
 ```
 
 Notes:
 
-- **`TF_VAR_github_repository`** must match **`owner/name`** of this GitHub repo exactly (same string `github.repository` uses in Actions).
-- If Terraform errors because an OIDC provider for `token.actions.githubusercontent.com` **already exists** in your account, set **`TF_VAR_use_existing_github_oidc_provider=true`** and apply again.
+- **`TF_VAR_github_repository`** must equal this repo’s **`owner/name`** exactly (same as `github.repository` in Actions).
+- If apply errors because an OIDC provider for **`token.actions.githubusercontent.com`** already exists in the account, set **`TF_VAR_use_existing_github_oidc_provider=true`** and apply again.
 
-### Step B — Wire GitHub to AWS
+### 5) Confirm the runtime (before blaming “the code”)
 
-1. Copy Terraform output **`github_actions_deploy_role_arn`**.
-2. In GitHub: **Settings → Secrets and variables → Actions**, create **`AWS_ROLE_ARN`** with that ARN.
+In the AWS console:
 
-After this, each **manual** workflow run can deploy **without** storing `AWS_ACCESS_KEY_ID` in GitHub.
+1. **Secrets Manager** → secret **`{project_name}/prod/db-creds`** (default **`myapp/prod/db-creds`**) → a **current** secret value exists (**`AWSCURRENT`**).
+2. **ECS** → cluster → service → **Deployments / Events** — no repeating “unable to pull” / “ResourceInitializationError”.
+3. **EC2 → Target groups** → your app target group → **Targets** — at least one **healthy** (health check **`/health`**).
+4. Open **`http://<alb_dns_name>/health`** then **`/`** (Terraform prints **`alb_dns_name`** / **`alb_urls`**).
+
+If targets stay empty or **Unhealthy**, read **ECS → Stopped task → Stopped reason** and **CloudWatch** log group **`/ecs/<project_name>-app`** (default **`/ecs/myapp-app`**).
+
+### 6) Wire GitHub Actions (after the first apply succeeds)
+
+1. Copy Terraform output **`github_actions_deploy_role_arn`** (the **deploy role** ARN — not the OIDC provider ARN).
+2. GitHub → **Settings → Secrets and variables → Actions** — create all secrets in the table below (**[GitHub Actions secrets](#github-actions-secrets)**).
+
+After **`AWS_ROLE_ARN`** is set, **manual workflow runs** can deploy **without** long-lived AWS keys in GitHub.
+
+### 7) First deploy from GitHub (recommended next step)
+
+**Actions → Production Deploy → Run workflow**. That run:
+
+- Builds the image from **`app/`**, pushes **`DOCKER_USERNAME/my-flask-app:<git-sha>`** and **`:latest`**.
+- Runs **`terraform apply`** with **`TF_VAR_image_tag=${{ github.sha }}`** so ECS pulls the **immutable SHA tag** (avoids “I pushed `:latest` but Fargate did not pick it up” surprises).
+
+---
+
+## Subsequent deployments (ongoing)
+
+### Normal path: GitHub Actions (use this day-to-day)
+
+1. Commit and push to **`main`** (or the branch you run the workflow from).
+2. **Actions → Production Deploy → Run workflow** (manual dispatch).
+3. Wait for green job: new image (**`:github.sha`**) + Terraform apply.
+4. Quick verify: **target group healthy**, **`/health`**, then **`/`**.
+
+Keep **`TF_VAR_db_password`** in GitHub secrets **aligned** with the password Terraform used when RDS was first created. Changing it later intentionally means **`terraform apply`** updating the DB password and secret — do that only when you mean to.
+
+### Laptop-only deploy (optional)
+
+Use when you want to change infra or image **without** Actions:
+
+```bash
+cd app
+docker build -t YOUR_DOCKERHUB_USERNAME/my-flask-app:YOUR_TAG .
+docker push YOUR_DOCKERHUB_USERNAME/my-flask-app:YOUR_TAG
+
+cd ../terraform
+export TF_VAR_db_password='...'   # same as before unless rotating
+export TF_VAR_docker_username='...'
+export TF_VAR_github_repository='owner/repo'
+export TF_VAR_image_tag='YOUR_TAG'
+terraform apply
+```
+
+**Caveat:** If you always use the tag **`latest`**, ECS may **not** redeploy when the digest behind `latest` changes. Prefer **unique tags** (the workflow’s **git SHA**) or **ECS → Update service → Force new deployment** after a `latest` push.
+
+### Changing only Terraform (no app code)
+
+- **With Actions:** push Terraform edits to GitHub, run **Production Deploy** (it still rebuilds the image; harmless).
+- **Without Actions:** `terraform plan` / `apply` from **`terraform/`** with laptop credentials.
+
+### Changing only application code
+
+Push to GitHub, run **Production Deploy**. The new **`github.sha`** image tag forces ECS to roll.
 
 ---
 

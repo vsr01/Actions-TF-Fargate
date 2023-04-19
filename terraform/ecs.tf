@@ -89,9 +89,12 @@ resource "aws_ecs_task_definition" "app" {
     }
   }])
 
+  # Wait until the secret has an AWSCURRENT version (RDS host is known). Otherwise ECS
+  # can register a task definition and start tasks while GetSecretValue still fails.
   depends_on = [
     aws_iam_role_policy_attachment.ecs_exec_managed,
     aws_iam_role_policy.ecs_exec_secrets,
+    aws_secretsmanager_secret_version.db_creds,
   ]
 }
 

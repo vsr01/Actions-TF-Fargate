@@ -64,7 +64,7 @@ flowchart LR
 
 **Traffic path for the demo:** browser → **ALB** (port 80) → **Fargate task** (container port 5000) → **RDS** when you hit **`/`**. The ALB target group health check uses **`/health`**, which **does not** open a database connection (see `app/app.py`).
 
-**Application database:** On startup the app runs SQLAlchemy **`create_all()`** for the **`task`** table. It also **`DROP TABLE IF EXISTS`** for legacy demo tables (**`visit`**, **`guestbook_entry`**) so upgraded deployments do not keep dead schema.
+**Application database:** On the **first request** to any route except **`/health`**, the app runs **`create_all()`** for the **`task`** table and drops legacy demo tables (**`visit`**, **`guestbook_entry`**). **`/health`** stays DB-free so the ALB can mark targets healthy even if MySQL is briefly unavailable during task startup.
 
 ---
 

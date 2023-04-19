@@ -1,4 +1,5 @@
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Tuple
 from urllib.parse import quote_plus
@@ -58,9 +59,29 @@ def _drop_legacy_tables() -> None:
             conn.execute(text(f"DROP TABLE IF EXISTS `{name}`"))
 
 
-with app.app_context():
-    db.create_all()
-    _drop_legacy_tables()
+_schema_lock = threading.Lock()
+_schema_ready = False
+
+
+def _ensure_schema() -> None:
+    """Run once per worker after import so /health never needs MySQL (workers can bind)."""
+    global _schema_ready
+    if _schema_ready:
+        return
+    with _schema_lock:
+        if _schema_ready:
+            return
+        db.create_all()
+        _drop_legacy_tables()
+        _schema_ready = True
+
+
+@app.before_request
+def _init_db_schema_before_non_health_requests() -> None:
+    path = (request.path or "").rstrip("/")
+    if path == "/health":
+        return
+    _ensure_schema()
 
 
 @app.route("/health")

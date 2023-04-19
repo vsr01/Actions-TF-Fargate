@@ -58,7 +58,7 @@ flowchart LR
   ECS --> CW
 ```
 
-**Deploy time (on each push to `main`):** GitHub Actions builds and pushes the image, runs Terraform from `terraform/`, and Terraform creates or updates the AWS resources above (including task definitions wired to Secrets Manager).
+**Deploy time (manual):** In GitHub you run the **Production Deploy** workflow (**Actions → Production Deploy → Run workflow**). It builds and pushes the image, runs Terraform from `terraform/`, and Terraform creates or updates the AWS resources above (including task definitions wired to Secrets Manager).
 
 **Traffic path for the demo:** browser → **ALB** (port 80) → **Fargate task** (container port 5000) → **RDS** when you hit **`/`**. The ALB target group health check uses **`/health`**, which **does not** open a database connection (see `app/app.py`).
 
@@ -66,9 +66,9 @@ flowchart LR
 
 ## Deploy and runtime flow
 
-### 1) You push to `main` (or run the workflow manually)
+### 1) You start the workflow manually
 
-GitHub checks out the repo.
+In the GitHub UI: **Actions → Production Deploy → Run workflow**. GitHub checks out the repo at the selected branch (usually `main`).
 
 ### 2) AWS credentials via OIDC
 
@@ -135,7 +135,7 @@ Notes:
 1. Copy Terraform output **`github_actions_deploy_role_arn`**.
 2. In GitHub: **Settings → Secrets and variables → Actions**, create **`AWS_ROLE_ARN`** with that ARN.
 
-After this, pushes to **`main`** can deploy **without** storing `AWS_ACCESS_KEY_ID` in GitHub.
+After this, each **manual** workflow run can deploy **without** storing `AWS_ACCESS_KEY_ID` in GitHub.
 
 ---
 
@@ -179,7 +179,7 @@ Each lab is a **single change** followed by **`terraform plan`** (always read th
    In `terraform/alb.tf`, set the target group health check **`path`** to **`/`** instead of **`/health`**. Apply, then stop RDS or break security groups and observe how ALB health differs. Change it back.
 
 3. **Circuit breaker**  
-   In `terraform/ecs.tf`, set **`deployment_circuit_breaker.enable`** to **`false`**, push a deliberately broken **`Dockerfile`**, and compare ECS deployment behavior. Restore **`true`**.
+   In `terraform/ecs.tf`, set **`deployment_circuit_breaker.enable`** to **`false`**, commit a deliberately broken **`Dockerfile`**, run the workflow manually, and compare ECS deployment behavior. Restore **`true`**.
 
 4. **Security group direction**  
    Remove the **ingress** rule that allows ALB → task **:5000** and watch targets go unhealthy. Restore the rule.

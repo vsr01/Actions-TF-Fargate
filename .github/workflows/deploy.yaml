@@ -1,5 +1,6 @@
 # -----------------------------------------------------------------------------
-# Continuous deploy: build container image, then Terraform apply.
+# Manual deploy: build container image, then Terraform apply.
+# Run from GitHub: Actions -> Production Deploy -> Run workflow.
 #
 # Auth model: GitHub OIDC -> AWS IAM role (secret AWS_ROLE_ARN). Bootstrap that role
 # once with a local `terraform apply` before relying on this workflow alone.
@@ -8,8 +9,6 @@
 name: Production Deploy
 
 on:
-  push:
-    branches: ["main"]
   workflow_dispatch:
 
 permissions:

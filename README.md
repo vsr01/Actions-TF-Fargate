@@ -2,8 +2,6 @@
 
 A small **learning** project: **Terraform** provisions **VPC**, **RDS MySQL**, **Application Load Balancer**, and **ECS on Fargate**; **GitHub Actions** builds a **Flask** container and runs `terraform apply` using **OIDC** (no long-lived AWS keys in GitHub).
 
-The **IAM OIDC provider** and **GitHub deploy role** are **not** managed by Terraform here. You create them **once in the AWS console** (or your company’s equivalent bootstrap), then store the role ARN in GitHub.
-
 This README explains **what runs where**, **the end-to-end flow**, **one-time bootstrap**, and **suggested labs** you can perform safely on your own account.
 
 ---
@@ -18,7 +16,7 @@ This README explains **what runs where**, **the end-to-end flow**, **one-time bo
 | Secrets Manager JSON for ECS | `terraform/rds.tf` |
 | ALB, target group, HTTP listener | `terraform/alb.tf` |
 | ECS cluster, task definition, service, logs | `terraform/ecs.tf` |
-| GitHub OIDC → IAM (manual in AWS console) | README bootstrap below |
+| GitHub OIDC → IAM role | `terraform/iam_github.tf` |
 | CI pipeline | `.github/workflows/deploy.yaml` |
 | Flask + SQLAlchemy + health endpoint | `app/app.py` |
 
@@ -74,7 +72,7 @@ In the GitHub UI: **Actions → Production Deploy → Run workflow**. GitHub che
 
 ### 2) AWS credentials via OIDC
 
-The workflow job has `permissions: id-token: write`. The **configure-aws-credentials** action exchanges the GitHub OIDC token for temporary **STS** credentials by assuming the IAM role whose ARN is in **`AWS_ROLE_ARN`** (that role must already exist; see bootstrap).
+The workflow job has `permissions: id-token: write`. The **configure-aws-credentials** action exchanges the GitHub OIDC token for temporary **STS** credentials by assuming the IAM role whose ARN is in **`AWS_ROLE_ARN`**.
 
 ### 3) Docker build and push
 
@@ -88,7 +86,7 @@ The **Docker** build uses **`app/`** as context, tags the image as:
 From **`terraform/`**, Terraform:
 
 1. Refreshes state from the **S3** backend (see `terraform/backend.tf`).
-2. Ensures networking, RDS, secrets, ALB, ECS cluster/service, and the **ECS task execution** IAM role exist as declared.
+2. Ensures networking, RDS, secrets, ALB, ECS cluster/service, and IAM exist as declared.
 3. Registers **new task definition revisions** when inputs change (for example **`TF_VAR_image_tag`** set to the commit SHA).
 
 ### 5) ECS rolls the service
@@ -103,81 +101,41 @@ The target group health check calls **`/health`** on each task IP. When healthy,
 
 ## Prerequisites
 
-1. **AWS account** with permission to create the resources in this Terraform stack (VPC, RDS, ECS, ELB, IAM roles for ECS, Secrets Manager, CloudWatch Logs) and to complete the **IAM OIDC bootstrap** in the console.
-2. **S3 bucket + DynamoDB table** for remote state, matching `terraform/backend.tf` (create them in the console or any way you prefer before the first successful `terraform init` from CI).
+1. **AWS account** with permissions to create VPC, RDS, ECS, ELB, IAM, Secrets Manager, CloudWatch Logs, and (for bootstrap) IAM OIDC providers.
+2. **S3 bucket + DynamoDB table** named in `terraform/backend.tf` (create these once; names are placeholders you should change to match your account).
 3. **GitHub repository** hosting this code.
 4. **Docker Hub** account (username + access token or password for CI login).
 
 ---
 
-## One-time bootstrap (AWS console + GitHub)
+## One-time bootstrap (important)
 
-Terraform in this repository **does not** create the GitHub OIDC identity provider or the **deploy** IAM role. That matches how many teams do **platform bootstrap**: identity wiring is done once outside the app Terraform, then application pipelines only **assume** an existing role.
+There is a **chicken-and-egg** problem: the GitHub workflow assumes **`AWS_ROLE_ARN`**, but that role is **created by Terraform**. First apply must run **with normal AWS credentials** (for example your laptop using `aws configure` or environment variables).
 
-Do these steps **before** the first successful **Production Deploy** workflow run.
+### Step A — Local environment
 
-### Step 0 — Remote state bucket and lock table (if you use the S3 backend)
+From the repo root:
 
-Edit `terraform/backend.tf` to use **your** bucket name and lock table name, then in the AWS console (or CLI):
-
-1. **S3** — Create the bucket in your chosen region, enable **versioning** (recommended for state), and default encryption if you like.
-2. **DynamoDB** — Create a table used for state locking: partition key **`LockID`** (string), same region as the bucket. Point `dynamodb_table` in `backend.tf` at this table name.
-
-Until the bucket exists, `terraform init` from Actions will fail when it tries to configure the backend.
-
-### Step 1 — IAM OIDC identity provider for GitHub
-
-1. Open **IAM → Identity providers → Add provider**.
-2. Choose **OpenID Connect**.
-3. **Provider URL:** `https://token.actions.githubusercontent.com`
-4. **Audience:** `sts.amazonaws.com`
-5. **Thumbprints:** Add the thumbprint(s) GitHub documents for this integration. The official guide is here: [Configuring OpenID Connect in Amazon Web Services](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services). Some AWS console flows can fetch a thumbprint for you; if in doubt, follow GitHub’s current list in that doc.
-
-Save the provider. Note your **12-digit AWS account ID** (top-right in the console); you need it for the trust policy in the next step.
-
-### Step 2 — IAM role trusted by GitHub Actions
-
-1. Open **IAM → Roles → Create role**.
-2. **Trusted entity type:** **Web identity**.
-3. **Identity provider:** select **`token.actions.githubusercontent.com`** (the provider you added).
-4. **Audience:** `sts.amazonaws.com`.
-
-Then replace the generated trust policy with one that **pins your repository** (adjust `YOUR_GITHUB_ORG`, `YOUR_REPO_NAME`, and `ACCOUNT_ID`):
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-        },
-        "StringLike": {
-          "token.actions.githubusercontent.com:sub": "repo:YOUR_GITHUB_ORG/YOUR_REPO_NAME:*"
-        }
-      }
-    }
-  ]
-}
+```bash
+cd terraform
+export TF_VAR_db_password='choose-a-strong-password'
+export TF_VAR_docker_username='your-dockerhub-username'
+export TF_VAR_github_repository='YOUR_GITHUB_LOGIN/Actions-TF-Fargate'
+terraform init
+terraform apply
 ```
 
-For a learning repo, attaching **`PowerUserAccess`** is common; for real organizations you would attach a **scoped** policy listing only what `terraform apply` needs.
+Notes:
 
-Create the role and copy its **ARN** (for example `arn:aws:iam::123456789012:role/github-actions-deploy`).
+- **`TF_VAR_github_repository`** must match **`owner/name`** of this GitHub repo exactly (same string `github.repository` uses in Actions).
+- If Terraform errors because an OIDC provider for `token.actions.githubusercontent.com` **already exists** in your account, set **`TF_VAR_use_existing_github_oidc_provider=true`** and apply again.
 
-### Step 3 — GitHub secret
+### Step B — Wire GitHub to AWS
 
-In GitHub: **Settings → Secrets and variables → Actions**, create **`AWS_ROLE_ARN`** with the role ARN from Step 2.
+1. Copy Terraform output **`github_actions_deploy_role_arn`**.
+2. In GitHub: **Settings → Secrets and variables → Actions**, create **`AWS_ROLE_ARN`** with that ARN.
 
-### Step 4 — Run the workflow
-
-**Actions → Production Deploy → Run workflow.** That run performs the first (or next) `terraform apply` using OIDC—no AWS access keys stored in GitHub.
+After this, each **manual** workflow run can deploy **without** storing `AWS_ACCESS_KEY_ID` in GitHub.
 
 ---
 
@@ -185,12 +143,12 @@ In GitHub: **Settings → Secrets and variables → Actions**, create **`AWS_ROL
 
 | Secret | Purpose |
 |--------|---------|
-| **`AWS_ROLE_ARN`** | IAM role ARN GitHub assumes via OIDC (from console Step 2). |
+| **`AWS_ROLE_ARN`** | IAM role ARN for OIDC (from Terraform output). |
 | **`DOCKER_USERNAME`** | Docker Hub login; also **`TF_VAR_docker_username`**. |
 | **`DOCKER_PASSWORD`** | Docker Hub password or token. |
 | **`TF_VAR_db_password`** | RDS master password (same variable name Terraform expects). |
 
-The workflow sets **`TF_VAR_image_tag`** to **`github.sha`** automatically.
+The workflow sets **`TF_VAR_image_tag`** to **`github.sha`** and **`TF_VAR_github_repository`** to **`github.repository`** automatically.
 
 ---
 

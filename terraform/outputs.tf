@@ -11,3 +11,13 @@ output "alb_urls" {
     health = "http://${aws_lb.app.dns_name}/health"
   }
 }
+
+output "github_actions_deploy_role_arn" {
+  description = "Add this value as GitHub repository secret AWS_ROLE_ARN for OIDC-based deploys."
+  value       = aws_iam_role.github_actions_deploy.arn
+}
+
+output "github_oidc_provider_arn" {
+  description = "IAM OIDC provider ARN used for GitHub Actions (for troubleshooting)."
+  value       = local.github_oidc_provider_arn
+}

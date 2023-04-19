@@ -28,8 +28,19 @@ variable "docker_username" {
 
 variable "image_tag" {
   type        = string
-  description = "Immutable image tag (for example git SHA). CI sets TF_VAR_image_tag."
+  description = "Immutable image tag (for example git SHA) so ECS pulls the new image each deploy."
   default     = "latest"
+}
+
+variable "github_repository" {
+  type        = string
+  description = "GitHub repo for OIDC trust, in owner/name form. CI sets TF_VAR_github_repository to github.repository."
+}
+
+variable "use_existing_github_oidc_provider" {
+  type        = bool
+  description = "Set true if this AWS account already registered https://token.actions.githubusercontent.com (avoid duplicate provider errors)."
+  default     = false
 }
 
 variable "alb_ingress_cidr_ipv4" {

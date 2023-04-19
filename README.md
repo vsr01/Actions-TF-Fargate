@@ -134,6 +134,8 @@ aws s3api put-bucket-versioning --bucket "$TF_STATE_BUCKET" \
   --versioning-configuration Status=Enabled
 ```
 
+When you type or paste any `export ...='...'` line in this guide, use a **normal keyboard apostrophe** `'` (ASCII). **“Smart” / curly quotes** from word processors or email often break the shell.
+
 Edit **`terraform/backend.tf`**: set **`bucket`** to that name. From **`terraform/`**:
 
 ```bash
@@ -141,8 +143,6 @@ terraform init
 # If you changed backend settings after a failed init:
 # terraform init -reconfigure
 ```
-
-Use **straight ASCII single quotes** in shell `export` lines (not curly “smart” quotes).
 
 ### 3) Push a real container image to Docker Hub (critical)
 

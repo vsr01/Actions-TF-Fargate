@@ -18,7 +18,7 @@ This README explains **what runs where**, **the end-to-end flow**, **one-time bo
 | ECS cluster, task definition, service, logs | `terraform/ecs.tf` |
 | GitHub OIDC → IAM role | `terraform/iam_github.tf` |
 | CI pipeline | `.github/workflows/deploy.yaml` |
-| Flask + SQLAlchemy + health endpoint | `app/app.py` |
+| Flask task list + SQLAlchemy + `/health` | `app/app.py` |
 
 ---
 
@@ -28,8 +28,10 @@ This README explains **what runs where**, **the end-to-end flow**, **one-time bo
 .
 ├── README.md
 ├── app/
-│   ├── app.py              # Flask app (/ hits DB, /health does not)
+│   ├── app.py              # Flask task list (/ uses RDS; /health does not)
 │   ├── Dockerfile
+│   ├── templates/
+│   │   └── index.html
 │   └── requirements.txt
 ├── terraform/
 │   ├── *.tf                # Root Terraform module
@@ -61,6 +63,8 @@ flowchart LR
 **Deploy time (manual):** In GitHub you run the **Production Deploy** workflow (**Actions → Production Deploy → Run workflow**). It builds and pushes the image, runs Terraform from `terraform/`, and Terraform creates or updates the AWS resources above (including task definitions wired to Secrets Manager).
 
 **Traffic path for the demo:** browser → **ALB** (port 80) → **Fargate task** (container port 5000) → **RDS** when you hit **`/`**. The ALB target group health check uses **`/health`**, which **does not** open a database connection (see `app/app.py`).
+
+**Application database:** On startup the app runs SQLAlchemy **`create_all()`** for the **`task`** table. It also **`DROP TABLE IF EXISTS`** for legacy demo tables (**`visit`**, **`guestbook_entry`**) so upgraded deployments do not keep dead schema.
 
 ---
 
@@ -157,13 +161,13 @@ The workflow sets **`TF_VAR_image_tag`** to **`github.sha`** and **`TF_VAR_githu
 Terraform prints **`alb_dns_name`** and **`alb_urls`**.
 
 - Open **`http://<alb_dns_name>/health`** — should return JSON `{"status":"ok"}` without touching RDS.
-- Open **`http://<alb_dns_name>/`** — increments a counter stored in MySQL.
+- Open **`http://<alb_dns_name>/`** — **task list** UI backed by MySQL (add tasks, mark done, delete).
 
 Use the AWS console in parallel:
 
 1. **EC2 → Load Balancers** — target group attachment, health.
 2. **ECS → Cluster → Service → Tasks** — task public IP, deployment events, stopped reason.
-3. **CloudWatch Logs** — log group `/ecs/<project>-app`.
+3. **CloudWatch Logs** — log group **`/ecs/<project_name>-app`** (default **`/ecs/myapp-app`** if you kept `project_name = "myapp"` in `terraform/variables.tf`).
 4. **RDS** — endpoint, subnet group, security groups.
 
 ---
@@ -173,7 +177,7 @@ Use the AWS console in parallel:
 Each lab is a **single change** followed by **`terraform plan`** (always read the plan) and **`apply`** when you are ready. Keep the AWS console open for the same resource.
 
 1. **Trace OIDC**  
-   Temporarily set an wrong **`AWS_ROLE_ARN`** in GitHub and read the workflow error. Restore the correct ARN.
+   Temporarily set a wrong **`AWS_ROLE_ARN`** in GitHub and read the workflow error. Restore the correct ARN.
 
 2. **Health check vs application route**  
    In `terraform/alb.tf`, set the target group health check **`path`** to **`/`** instead of **`/health`**. Apply, then stop RDS or break security groups and observe how ALB health differs. Change it back.
@@ -224,6 +228,6 @@ Learning is the priority; if you want to trim spend during idle weeks:
 1. **`README.md`** (this file) — flow and bootstrap.
 2. **`terraform/vpc.tf`** — how traffic is allowed between ALB, tasks, and RDS.
 3. **`terraform/ecs.tf`** — task definition, service, circuit breaker, grace period.
-4. **`app/app.py`** — **`/health`** vs **`/`** split for load balancer behavior.
+4. **`app/app.py`** and **`app/templates/index.html`** — **`/health`** vs **`/`** (task list + RDS) for load balancer behavior.
 
 If something fails, capture **`terraform plan`** output, the **ECS service events**, and **target group health** details — that trio usually pinpoints the layer (Terraform vs ECS vs ALB vs RDS).

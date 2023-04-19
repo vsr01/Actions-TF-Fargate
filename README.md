@@ -140,7 +140,7 @@ terraform plan
 terraform apply
 ```
 
-Use normal **ASCII** quotes in `export` lines (not curly quotes pasted from email/docs). **`TF_VAR_github_repository`** must match this repo’s **`owner/name`**. If apply errors because a GitHub OIDC provider already exists in the account: **`export TF_VAR_use_existing_github_oidc_provider=true`** and apply again.
+**`TF_VAR_github_repository`** must match this repo’s **`owner/name`**. If apply errors because a GitHub OIDC provider already exists in the account: **`export TF_VAR_use_existing_github_oidc_provider=true`** and apply again.
 
 4. **Expectation:** Until GitHub has built and pushed the image, ECS may show failed tasks or the ALB may return **503**. That is normal right after bootstrap; the next step fixes it.
 

@@ -5,8 +5,9 @@
 # repository subjects to the deploy role. CI then assumes that role instead of storing
 # long-lived AWS access keys in GitHub.
 #
-# PowerUserAccess is intentionally broad for solo learning; replace with a scoped policy
-# when you want IAM practice tightening least privilege.
+# PowerUserAccess allows most services but does not grant IAM API calls. Terraform run
+# from GitHub Actions must read/write IAM (roles, OIDC provider, etc.), so IAMFullAccess
+# is attached as well. Replace both with a scoped policy when you tighten least privilege.
 # -----------------------------------------------------------------------------
 
 data "tls_certificate" "github_actions" {
@@ -60,4 +61,9 @@ resource "aws_iam_role" "github_actions_deploy" {
 resource "aws_iam_role_policy_attachment" "github_actions_deploy_power_user" {
   role       = aws_iam_role.github_actions_deploy.name
   policy_arn = "arn:aws:iam::aws:policy/PowerUserAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "github_actions_deploy_iam_full" {
+  role       = aws_iam_role.github_actions_deploy.name
+  policy_arn = "arn:aws:iam::aws:policy/IAMFullAccess"
 }

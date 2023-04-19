@@ -106,7 +106,7 @@ The target group health check calls **`/health`** on each task IP. When healthy,
 ## Prerequisites
 
 1. **AWS account** with permissions to create VPC, RDS, ECS, ELB, IAM, Secrets Manager, CloudWatch Logs, and (for bootstrap) IAM OIDC providers.
-2. **S3 bucket + DynamoDB table** named in `terraform/backend.tf` (create these once; names are placeholders you should change to match your account).
+2. **S3 bucket** named in `terraform/backend.tf` (create it once in your account; the placeholder bucket name must be changed — S3 names are globally unique). Terraform **1.11+** is required for S3 native state locking (`use_lockfile` in `backend.tf`). No separate DynamoDB table is needed.
 3. **GitHub repository** hosting this code.
 4. **Docker Hub** account (username + access token or password for CI login).
 
@@ -115,6 +115,25 @@ The target group health check calls **`/health`** on each task IP. When healthy,
 ## One-time bootstrap (important)
 
 There is a **chicken-and-egg** problem: the GitHub workflow assumes **`AWS_ROLE_ARN`**, but that role is **created by Terraform**. First apply must run **with normal AWS credentials** (for example your laptop using `aws configure` or environment variables).
+
+### Step 0 — S3 bucket for Terraform state (first time only)
+
+`terraform/backend.tf` points at an S3 **`bucket`** that **must already exist** in the AWS account you use for `terraform init`. The placeholder name in the repo will not exist in your account until you create it.
+
+1. Pick a **globally unique** bucket name (example: `mycompany-terraform-state-2026-us-east-1`).
+2. Create it in **`us-east-1`** (same region as `backend.tf`), then turn on versioning (recommended):
+
+```bash
+export TF_STATE_BUCKET='your-globally-unique-bucket-name'
+aws s3api create-bucket --bucket "$TF_STATE_BUCKET" --region us-east-1
+aws s3api put-bucket-versioning --bucket "$TF_STATE_BUCKET" \
+  --versioning-configuration Status=Enabled
+```
+
+3. Edit **`terraform/backend.tf`** and set **`bucket = "<that same name>"`**.
+4. Run **`terraform init`** from **`terraform/`** (use **`terraform init -reconfigure`** if you already tried init with a different backend).
+
+Use **straight single quotes** in shell exports (ASCII `'`). “Smart” quotes copied from documents will break `export` lines.
 
 ### Step A — Local environment
 

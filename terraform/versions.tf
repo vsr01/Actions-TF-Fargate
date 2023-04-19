@@ -1,7 +1,8 @@
 # Root module: pin Terraform and providers so `terraform init` is reproducible.
 
 terraform {
-  required_version = ">= 1.3.0"
+  # S3 backend `use_lockfile` (native locking) is stable in Terraform 1.11+.
+  required_version = ">= 1.11.0"
 
   required_providers {
     aws = {

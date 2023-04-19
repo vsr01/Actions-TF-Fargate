@@ -33,10 +33,11 @@ def build_sqlalchemy_uri() -> str:
 
 
 app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = build_sqlalchemy_uri()
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-db = SQLAlchemy(app)
+# Deferred init: binding the DB URI at import time crashes Gunicorn (no /health) if
+# secrets are missing or MySQL is unreachable before the worker can listen on :5000.
+db = SQLAlchemy()
 
 
 class Task(db.Model):
@@ -64,13 +65,15 @@ _schema_ready = False
 
 
 def _ensure_schema() -> None:
-    """Run once per worker after import so /health never needs MySQL (workers can bind)."""
+    """Run once per worker: bind SQLAlchemy to the app, then create tables (needs MySQL)."""
     global _schema_ready
     if _schema_ready:
         return
     with _schema_lock:
         if _schema_ready:
             return
+        app.config["SQLALCHEMY_DATABASE_URI"] = build_sqlalchemy_uri()
+        db.init_app(app)
         db.create_all()
         _drop_legacy_tables()
         _schema_ready = True
@@ -78,8 +81,7 @@ def _ensure_schema() -> None:
 
 @app.before_request
 def _init_db_schema_before_non_health_requests() -> None:
-    path = (request.path or "").rstrip("/")
-    if path == "/health":
+    if request.endpoint == "health":
         return
     _ensure_schema()
 
@@ -175,4 +177,5 @@ def index():
 
 
 if __name__ == "__main__":
+    _ensure_schema()
     app.run(host="0.0.0.0", port=5000)

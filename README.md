@@ -121,7 +121,7 @@ There is a **chicken-and-egg**: the workflow needs **`AWS_ROLE_ARN`**, but that 
 ### 1) Install and check versions
 
 - **Terraform ≥ 1.11** (`terraform version`) — required for S3 `use_lockfile` in `terraform/backend.tf`.
-- **Docker** (optional for step 4 if you only use GitHub Actions after bootstrap — but easiest first path is to push **`latest`** once from your laptop).
+- **Docker on your laptop** — optional if you use **Option A** below (first image build happens in GitHub Actions).
 
 ### 2) Create the Terraform state bucket (once per account/region)
 
@@ -144,15 +144,24 @@ terraform init
 # terraform init -reconfigure
 ```
 
-### 3) Push a real container image to Docker Hub (critical)
+### 3) Why an image is mentioned at all (and when you can skip local Docker)
 
-The ECS task definition always pulls:
+**Fargate never builds your app.** It only **pulls** a container image from Docker Hub at the URI Terraform puts in the task definition:
 
-**`<TF_VAR_docker_username>/my-flask-app:<TF_VAR_image_tag>`**
+**`<TF_VAR_docker_username>/my-flask-app:<TF_VAR_image_tag>`** (default tag **`latest`** in `terraform/variables.tf`).
 
-By default **`TF_VAR_image_tag`** is **`latest`** (`terraform/variables.tf`). **If that image does not exist on Docker Hub, ECS tasks will fail** (ALB **503**, target group **no healthy targets**) even when Terraform succeeds.
+So **some** computer must **`docker build` + `docker push`** at least once before ECS can run a healthy task. In this project that is usually **GitHub Actions**, not your laptop.
 
-From the repo root:
+**Bootstrap order:** Terraform creates the **GitHub OIDC deploy role** on first apply, but GitHub cannot run that workflow until you add **`AWS_ROLE_ARN`**. So the **first** `terraform apply` (next step) often runs **before** any image exists. That can leave ECS **temporarily broken** (ALB **503**, failed tasks) until the **first successful “Production Deploy”** workflow run — **that is expected** if you skip local Docker.
+
+Pick one:
+
+| Option | Local `docker build` / `push`? | Typical experience |
+|--------|----------------------------------|----------------------|
+| **A — CI-first (recommended)** | **No.** | First `apply` may show unhealthy ECS until you add GitHub secrets and run **Production Deploy** once; the workflow builds and pushes **`:github.sha`** and **`:latest`**, then Terraform in CI points ECS at the SHA tag. |
+| **B — Push `latest` once from laptop** | **Yes** (below). | Fewer “why is everything red?” hours: an image exists before first `apply`, so targets often go **healthy** before you wire Actions. |
+
+**Option B — only if you want a local image first**
 
 ```bash
 cd app
@@ -161,7 +170,7 @@ docker login   # Docker Hub
 docker push YOUR_DOCKERHUB_USERNAME/my-flask-app:latest
 ```
 
-If you use a different tag, set **`export TF_VAR_image_tag='that-tag'`** before `terraform apply` and push **`...:that-tag`**.
+If you use another tag, set **`export TF_VAR_image_tag='that-tag'`** before `terraform apply` and push **`...:that-tag`**.
 
 ### 4) First `terraform apply` (laptop AWS credentials)
 
@@ -183,6 +192,8 @@ Notes:
 - If apply errors because an OIDC provider for **`token.actions.githubusercontent.com`** already exists in the account, set **`TF_VAR_use_existing_github_oidc_provider=true`** and apply again.
 
 ### 5) Confirm the runtime (before blaming “the code”)
+
+If you used **Option A** and have **not** run **Production Deploy** yet, ECS may still be failing — add GitHub secrets (**step 6**) and run the workflow (**step 7**) first, then re-check here.
 
 In the AWS console:
 

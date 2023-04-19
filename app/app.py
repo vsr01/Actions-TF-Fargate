@@ -34,6 +34,8 @@ def build_sqlalchemy_uri() -> str:
 
 app = Flask(__name__)
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+# RDS MySQL 8 default auth (caching_sha2_password) needs PyMySQL + cryptography.
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True}
 
 # Deferred init: binding the DB URI at import time crashes Gunicorn (no /health) if
 # secrets are missing or MySQL is unreachable before the worker can listen on :5000.
@@ -62,21 +64,28 @@ def _drop_legacy_tables() -> None:
 
 _schema_lock = threading.Lock()
 _schema_ready = False
+_db_app_bound = False
 
 
 def _ensure_schema() -> None:
     """Run once per worker: bind SQLAlchemy to the app, then create tables (needs MySQL)."""
-    global _schema_ready
+    global _schema_ready, _db_app_bound
     if _schema_ready:
         return
     with _schema_lock:
         if _schema_ready:
             return
-        app.config["SQLALCHEMY_DATABASE_URI"] = build_sqlalchemy_uri()
-        db.init_app(app)
-        db.create_all()
-        _drop_legacy_tables()
-        _schema_ready = True
+        try:
+            if not _db_app_bound:
+                app.config["SQLALCHEMY_DATABASE_URI"] = build_sqlalchemy_uri()
+                db.init_app(app)
+                _db_app_bound = True
+            db.create_all()
+            _drop_legacy_tables()
+            _schema_ready = True
+        except Exception:
+            app.logger.exception("Database initialization failed (see stderr / CloudWatch)")
+            raise
 
 
 @app.before_request
